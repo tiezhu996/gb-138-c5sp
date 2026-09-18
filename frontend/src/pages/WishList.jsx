@@ -1,12 +1,29 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
+// 兼容旧数据：缺少认领/备注字段的心愿补默认值
+const normalizeWish = (wish) => ({
+  claimedBy: null,
+  claimedAt: null,
+  completionNote: null,
+  ...wish
+});
+
 const getInitialWishes = () => {
   try {
     const saved = localStorage.getItem('wishList');
-    return saved ? JSON.parse(saved) : [];
+    const parsed = saved ? JSON.parse(saved) : [];
+    return Array.isArray(parsed) ? parsed.map(normalizeWish) : [];
   } catch {
     return [];
+  }
+};
+
+const getInitialIdentity = () => {
+  try {
+    return localStorage.getItem('wishListIdentity') || '';
+  } catch {
+    return '';
   }
 };
 
@@ -14,10 +31,25 @@ const WishList = () => {
   const [wishes, setWishes] = useState(getInitialWishes);
   const [newWish, setNewWish] = useState('');
   const [filter, setFilter] = useState('all');
+  const [currentName, setCurrentName] = useState(getInitialIdentity);
+  const [noteDrafts, setNoteDrafts] = useState({});
 
   const saveWishes = (newWishes) => {
     setWishes(newWishes);
     localStorage.setItem('wishList', JSON.stringify(newWishes));
+  };
+
+  const updateIdentity = (name) => {
+    setCurrentName(name);
+    localStorage.setItem('wishListIdentity', name);
+  };
+
+  const clearNoteDraft = (id) => {
+    setNoteDrafts((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   };
 
   const addWish = () => {
@@ -29,7 +61,10 @@ const WishList = () => {
           text: newWish.trim(),
           completed: false,
           createdAt: new Date().toISOString(),
-          completedAt: null
+          completedAt: null,
+          claimedBy: null,
+          claimedAt: null,
+          completionNote: null
         }
       ];
       saveWishes(updated);
@@ -37,17 +72,47 @@ const WishList = () => {
     }
   };
 
-  const toggleWish = (id) => {
-    const updated = wishes.map(wish =>
-      wish.id === id
+  // 认领：仅限未完成且未被认领的心愿，需先填写家属身份
+  const claimWish = (id) => {
+    const name = currentName.trim();
+    if (!name) return;
+    const updated = wishes.map((wish) =>
+      wish.id === id && !wish.completed && !wish.claimedBy
+        ? { ...wish, claimedBy: name, claimedAt: new Date().toISOString() }
+        : wish
+    );
+    saveWishes(updated);
+  };
+
+  // 放弃认领：仅认领人本人可操作，心愿恢复为可认领状态
+  const releaseWish = (id) => {
+    const name = currentName.trim();
+    const updated = wishes.map((wish) =>
+      wish.id === id && !wish.completed && wish.claimedBy === name
+        ? { ...wish, claimedBy: null, claimedAt: null }
+        : wish
+    );
+    saveWishes(updated);
+    clearNoteDraft(id);
+  };
+
+  // 完成结项：仅认领人本人且填写了完成备注才可结项
+  const completeWish = (id) => {
+    const name = currentName.trim();
+    const note = (noteDrafts[id] || '').trim();
+    if (!note) return;
+    const updated = wishes.map((wish) =>
+      wish.id === id && !wish.completed && wish.claimedBy === name
         ? {
             ...wish,
-            completed: !wish.completed,
-            completedAt: !wish.completed ? new Date().toISOString() : null
+            completed: true,
+            completedAt: new Date().toISOString(),
+            completionNote: note
           }
         : wish
     );
     saveWishes(updated);
+    clearNoteDraft(id);
   };
 
   const deleteWish = (id) => {
@@ -55,6 +120,7 @@ const WishList = () => {
     saveWishes(updated);
   };
 
+  // 仅移除已完成心愿，不影响其他心愿的认领状态
   const clearCompleted = () => {
     if (confirm('确定要清除所有已完成的心愿吗？')) {
       const updated = wishes.filter(wish => !wish.completed);
@@ -70,6 +136,7 @@ const WishList = () => {
 
   const completedCount = wishes.filter(w => w.completed).length;
   const activeCount = wishes.length - completedCount;
+  const trimmedName = currentName.trim();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-fuchsia-50">
@@ -105,18 +172,18 @@ const WishList = () => {
           </div>
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/60 backdrop-blur-sm rounded-full text-sm text-rose-600 font-medium mb-6 shadow-sm border border-rose-100">
             <span>💝</span>
-            <span>心愿 · 温暖 · 实现</span>
+            <span>心愿 · 认领 · 实现</span>
           </div>
           <h2 className="text-4xl font-bold text-warm-900 mb-4">
             心愿清单
           </h2>
           <p className="text-lg text-warm-600 max-w-xl mx-auto leading-relaxed">
-            记录每一个想完成的心愿，让家人帮助您逐一实现。
+            记录每一个想完成的心愿，由家属认领后逐一实现。
             每一个心愿都值得被认真对待，每一份温暖都值得被珍藏。
           </p>
         </div>
 
-        <div className="relative bg-white/80 backdrop-blur-sm rounded-3xl shadow-xl p-8 mb-10 border border-white/60">
+        <div className="relative bg-white/80 backdrop-blur-sm rounded-3xl shadow-xl p-8 mb-6 border border-white/60">
           <div className="absolute top-0 right-0 w-32 h-32 opacity-10">
             <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-gradient-to-br from-rose-400 to-pink-500" />
           </div>
@@ -137,6 +204,23 @@ const WishList = () => {
               添加
             </button>
           </div>
+        </div>
+
+        <div className="relative bg-white/80 backdrop-blur-sm rounded-3xl shadow-xl px-8 py-5 mb-10 border border-white/60 flex flex-col sm:flex-row sm:items-center gap-3">
+          <span className="text-warm-600 font-medium flex items-center gap-2 flex-shrink-0">
+            <span>👪</span>
+            <span>我是家属</span>
+          </span>
+          <input
+            type="text"
+            value={currentName}
+            onChange={(e) => updateIdentity(e.target.value)}
+            placeholder="输入您的名字，用于认领和结项心愿"
+            className="flex-1 px-4 py-2.5 rounded-xl border-2 border-rose-100 focus:border-rose-400 focus:ring-4 focus:ring-rose-100 transition-all outline-none bg-white/50"
+          />
+          {!trimmedName && (
+            <span className="text-xs text-rose-400 flex-shrink-0">填写名字后才能认领心愿</span>
+          )}
         </div>
 
         <div className="flex justify-center gap-3 mb-8">
@@ -209,45 +293,130 @@ const WishList = () => {
             filteredWishes.map((wish) => (
               <div
                 key={wish.id}
-                className={`group relative bg-white/80 backdrop-blur-sm rounded-2xl p-6 flex items-center gap-5 transition-all duration-300 hover:shadow-xl border border-white/60 overflow-hidden ${
+                className={`group relative bg-white/80 backdrop-blur-sm rounded-2xl p-6 transition-all duration-300 hover:shadow-xl border border-white/60 overflow-hidden ${
                   wish.completed ? 'bg-gradient-to-r from-green-50/80 to-emerald-50/80' : ''
                 }`}
               >
-                <button
-                  onClick={() => toggleWish(wish.id)}
-                  className={`w-10 h-10 rounded-full border-3 flex items-center justify-center transition-all duration-300 flex-shrink-0 ${
-                    wish.completed
-                      ? 'bg-gradient-to-br from-green-500 to-emerald-500 border-transparent text-white shadow-lg scale-110'
-                      : 'border-warm-300 hover:border-rose-400 hover:bg-rose-50'
-                  }`}
-                >
-                  {wish.completed && (
+                <div className="flex items-center gap-5">
+                  <div
+                    className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-300 ${
+                      wish.completed
+                        ? 'bg-gradient-to-br from-green-500 to-emerald-500 text-white shadow-lg scale-110'
+                        : wish.claimedBy
+                          ? 'bg-gradient-to-br from-rose-400 to-pink-500 text-white shadow-md'
+                          : 'border-2 border-warm-200 bg-white/50'
+                    }`}
+                  >
+                    {wish.completed ? (
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : wish.claimedBy ? (
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
+                      </svg>
+                    ) : null}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-xl ${wish.completed ? 'text-warm-400 line-through' : 'text-warm-800 font-medium'}`}>
+                      {wish.text}
+                    </p>
+                    <p className="text-sm text-warm-400 mt-1 flex items-center gap-1 flex-wrap">
+                      {wish.completed ? (
+                        <>
+                          <span>✅</span>
+                          <span>
+                            {wish.claimedBy
+                              ? `由 ${wish.claimedBy} 完成于 ${new Date(wish.completedAt).toLocaleDateString('zh-CN')}`
+                              : `完成于 ${new Date(wish.completedAt).toLocaleDateString('zh-CN')}`}
+                          </span>
+                        </>
+                      ) : wish.claimedBy ? (
+                        <>
+                          <span>🤝</span>
+                          <span>
+                            {wish.claimedBy} 认领中 · 创建于 {new Date(wish.createdAt).toLocaleDateString('zh-CN')}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span>📅</span>
+                          <span>创建于 {new Date(wish.createdAt).toLocaleDateString('zh-CN')}</span>
+                        </>
+                      )}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => deleteWish(wish.id)}
+                    className="p-3 text-warm-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all duration-300 opacity-0 group-hover:opacity-100"
+                  >
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                     </svg>
-                  )}
-                </button>
-                <div className="flex-1 min-w-0">
-                  <p className={`text-xl ${wish.completed ? 'text-warm-400 line-through' : 'text-warm-800 font-medium'}`}>
-                    {wish.text}
-                  </p>
-                  <p className="text-sm text-warm-400 mt-1 flex items-center gap-1">
-                    <span>{wish.completed ? '✅' : '📅'}</span>
-                    <span>
-                      {wish.completed
-                        ? `完成于 ${new Date(wish.completedAt).toLocaleDateString('zh-CN')}`
-                        : `创建于 ${new Date(wish.createdAt).toLocaleDateString('zh-CN')}`}
-                    </span>
-                  </p>
+                  </button>
                 </div>
-                <button
-                  onClick={() => deleteWish(wish.id)}
-                  className="p-3 text-warm-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all duration-300 opacity-0 group-hover:opacity-100"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
+
+                {wish.completed && wish.completionNote && (
+                  <div className="mt-4 bg-white/70 rounded-xl px-4 py-3 border border-green-100">
+                    <p className="text-sm text-warm-600 flex items-start gap-2">
+                      <span>💬</span>
+                      <span><span className="font-semibold text-warm-700">完成备注：</span>{wish.completionNote}</span>
+                    </p>
+                  </div>
+                )}
+
+                {!wish.completed && !wish.claimedBy && (
+                  <div className="mt-4 pt-4 border-t border-rose-100/70 flex items-center justify-between gap-3">
+                    <span className="text-sm text-warm-400">等待家属认领</span>
+                    <button
+                      onClick={() => claimWish(wish.id)}
+                      disabled={!trimmedName}
+                      title={trimmedName ? '' : '请先在上方填写您的名字'}
+                      className="px-5 py-2.5 bg-gradient-to-r from-rose-500 to-pink-500 text-white rounded-xl font-semibold text-sm hover:shadow-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      <span>🤝</span>
+                      <span>认领这个心愿</span>
+                    </button>
+                  </div>
+                )}
+
+                {!wish.completed && wish.claimedBy && wish.claimedBy !== trimmedName && (
+                  <div className="mt-4 pt-4 border-t border-rose-100/70">
+                    <p className="text-sm text-warm-500 flex items-center gap-2">
+                      <span>👤</span>
+                      <span>已由 <span className="font-semibold text-rose-500">{wish.claimedBy}</span> 认领，正在实现中</span>
+                    </p>
+                  </div>
+                )}
+
+                {!wish.completed && wish.claimedBy && wish.claimedBy === trimmedName && (
+                  <div className="mt-4 pt-4 border-t border-rose-100/70 space-y-3">
+                    <textarea
+                      value={noteDrafts[wish.id] || ''}
+                      onChange={(e) => setNoteDrafts((prev) => ({ ...prev, [wish.id]: e.target.value }))}
+                      placeholder="填写完成备注（必填），记录心愿实现的过程..."
+                      rows={2}
+                      className="w-full px-4 py-3 rounded-xl border-2 border-rose-100 focus:border-rose-400 focus:ring-4 focus:ring-rose-100 transition-all outline-none bg-white/50 resize-none"
+                    />
+                    <div className="flex justify-end gap-3">
+                      <button
+                        onClick={() => releaseWish(wish.id)}
+                        className="px-5 py-2.5 bg-white/80 text-warm-500 rounded-xl font-semibold text-sm hover:bg-warm-100 transition-all duration-300 border border-warm-200"
+                      >
+                        放弃认领
+                      </button>
+                      <button
+                        onClick={() => completeWish(wish.id)}
+                        disabled={!(noteDrafts[wish.id] || '').trim()}
+                        title={(noteDrafts[wish.id] || '').trim() ? '' : '请先填写完成备注'}
+                        className="px-5 py-2.5 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-xl font-semibold text-sm hover:shadow-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                      >
+                        <span>✅</span>
+                        <span>完成结项</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))
           )}
